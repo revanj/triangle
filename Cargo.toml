@@ -4,3 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0"
+winit = { version = "0.30", features = ["android-native-activity"] }
+env_logger = "0.10"
+log = "0.4"
+wgpu = "30"
+pollster = "0.3"
+hecs = "0.11"
+bytemuck = "1"
+image = "0.25"
+nalgebra = "0.35"
