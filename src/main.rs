@@ -6,6 +6,8 @@ use std::{marker::PhantomData, sync::{Arc, mpsc::{Receiver, Sender, TryRecvError
 use nalgebra::vector;
 use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{ActiveEventLoop, EventLoop}, window::Window};
 
+use crate::sprite::Sprite;
+
 fn main() {
     run_game::<FlockOfBirdsGame>();
 }
@@ -24,7 +26,7 @@ struct Gpu {
 }
 
 struct Renderer {
-    instance: wgpu::Instance,
+    _instance: wgpu::Instance,
     surface: wgpu::Surface<'static>,
     gpu: Arc<Gpu>,
     _adapter: wgpu::Adapter,
@@ -84,7 +86,7 @@ struct Renderer {
         let sprite_pipeline = sprite::create_pipeline(&gpu, surface_config.format);
 
         Self {
-            instance,
+            _instance: instance,
             surface,
             _adapter: adapter,
             gpu,
@@ -107,13 +109,69 @@ struct Renderer {
         nalgebra::vector![extent.width as f32, extent.height as f32]
     }
 
-    pub fn render(&mut self, world: &hecs::World) {
-
+    pub fn render(&mut self) -> anyhow::Result<()> {
+        
+        Ok(())
     }
 
     pub fn request_redraw(&mut self) {
         self.window.request_redraw();
     }
+}
+
+fn render(world: &mut hecs::World, global: hecs::Entity) {
+    let rdr: &Renderer = &world.get::<&Renderer>(global).unwrap();
+    let output = match rdr.surface.get_current_texture() {
+        wgpu::CurrentSurfaceTexture::Success(surface_texture) => surface_texture,
+        wgpu::CurrentSurfaceTexture::Suboptimal(surface_texture) => {
+            surface_texture
+        }
+        wgpu::CurrentSurfaceTexture::Timeout
+        | wgpu::CurrentSurfaceTexture::Occluded
+        | wgpu::CurrentSurfaceTexture::Validation => {
+            return;
+        }
+        wgpu::CurrentSurfaceTexture::Outdated => {
+            rdr.surface.configure(&rdr.gpu.device, &rdr.surface_config);
+            return;
+        }
+        wgpu::CurrentSurfaceTexture::Lost => {
+            panic!("Lost device");
+        }
+    };
+    let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut encoder = rdr.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("Render Encoder"),
+    });
+
+    {
+        let mut render_pass: wgpu::RenderPass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.1,
+                        g: 0.2,
+                        b: 0.3,
+                        a: 1.0,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            occlusion_query_set: None,
+            timestamp_writes: None,
+            multiview_mask: None,
+        });
+        render_pass.set_pipeline(&rdr.sprite_pipeline);
+
+    }
+
+    rdr.gpu.queue.submit(std::iter::once(encoder.finish()));
+    rdr.gpu.queue.present(output);
 }
 
 struct Engine<G: Game> {
@@ -133,8 +191,6 @@ struct Engine<G: Game> {
             _phantom_game: PhantomData,
         }
     }
-
-    fn update(&mut self) {}
 }
 
 impl<G: Game> ApplicationHandler for Engine<G> {
@@ -145,6 +201,7 @@ impl<G: Game> ApplicationHandler for Engine<G> {
         self.world.insert(self.global, (renderer,)).unwrap();
         G::init(&mut self.world, self.global);
         self.finished_init = true;
+        self.world.get::<&mut Renderer>(self.global).unwrap().request_redraw();
     }
 
     fn window_event(
@@ -159,13 +216,12 @@ impl<G: Game> ApplicationHandler for Engine<G> {
             },
             WindowEvent::RedrawRequested => {
                 if self.finished_init {
-                    self.update();
+                    render(&mut self.world, self.global);
                 }
             },
             WindowEvent::Resized(size) 
-            if self.finished_init && size.width != 0 && size.height != 0 =>
-            {
-                let mut renderer = self.world.entity(self.global).unwrap().get::<&mut Renderer>().unwrap();
+            if self.finished_init && size.width != 0 && size.height != 0 => {
+                let mut renderer = self.world.get::<&mut Renderer>(self.global).unwrap();
                 renderer.resize(size.width, size.height);
                 renderer.request_redraw();
             }

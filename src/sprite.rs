@@ -1,10 +1,22 @@
 use std::{marker::PhantomData, sync::Arc};
 use image::GenericImageView;
-use wgpu::util::{DeviceExt, TextureFormatExt};
+use wgpu::util::DeviceExt;
+use bytemuck::Pod;
 
 pub struct Sprite {
     texture: UniformTexture,
-    mesh: GpuMesh<Vertex>
+    mesh: GpuMesh<Vertex>,
+    transfrom: GpuMat4,
+} impl Sprite {
+    pub fn set_mvp(&mut self) {
+    }
+    pub fn draw(&mut self, render_pass: wgpu::RenderPass) {
+        render_pass.set_bind_group(0, self.texture.bind_group(), &[]);
+        render_pass.set_bind_group(1, self.transfrom.bind_group(), &[]);
+        render_pass.set_vertex_buffer(0, self.mesh.vertices().slice(..));
+        render_pass.set_index_buffer(self.mesh.indices().slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.draw_indexed(0..(self.mesh.len_indices()), 0, 0..1);
+    }
 }
 
 pub struct GpuMesh<T> {
@@ -219,7 +231,7 @@ pub struct UniformMatrix {
         let zero = [[0f32; 4]; 4];
         let buffer = gpu.device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
-                label: Some(format!("Mat4x4 Uniform Buffer").as_str()),
+                label: Some("Mat4x4 Uniform Buffer"),
                 contents: bytemuck::cast_slice(&[zero]),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             }
@@ -232,7 +244,7 @@ pub struct UniformMatrix {
                     resource: buffer.as_entire_binding(),
                 }
             ],
-            label: Some(format!("UniformMatrix Bind Group").as_str()),
+            label: Some("UniformMatrix Bind Group"),
         });
 
         Self {
@@ -257,7 +269,7 @@ pub struct UniformMatrix {
                     count: None,
                 }
             ],
-            label: Some(format!("Matrix Bind Group Layout").as_str()),
+            label: Some("Matrix Bind Group Layout"),
         })
     }
 }
@@ -322,4 +334,69 @@ pub fn create_pipeline(gpu: &Arc<crate::Gpu>, surface_format: wgpu::TextureForma
             cache: None,
             multiview_mask: None,
         })
+}
+
+pub type GpuMat4 = GpuUniform<[[f32; 4]; 4]>;
+pub type GpuVec4 = GpuUniform<[f32; 4]>;
+pub type GpuFloat = GpuUniform<f32>;
+
+pub struct GpuUniform<T: Default + Copy + Pod + 'static> {
+    buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    _phantom: std::marker::PhantomData<T>,
+} impl<T: Default + Copy + Pod + 'static> GpuUniform<T> {
+    pub fn new(gpu: &Arc<crate::Gpu>) -> Self {
+        let zero = T::default();
+        let type_name = std::any::type_name::<T>();
+        let buffer = gpu.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some(format!("{type_name} Uniform Buffer").as_str()),
+                contents: bytemuck::cast_slice(&[zero]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }
+        );
+        let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &Self::bind_group_layout(gpu),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                }
+            ],
+            label: Some(format!("{type_name} Uniform Bind Group").as_str()),
+        });
+
+        Self {
+            buffer,
+            bind_group,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    pub fn bind_group(&self) -> &wgpu::BindGroup {
+        &self.bind_group
+    }
+
+    pub fn buffer(&self) -> &wgpu::Buffer {
+        &self.buffer
+    }
+
+    pub fn bind_group_layout(gpu: &crate::Gpu) -> wgpu::BindGroupLayout {
+        let type_name = std::any::type_name::<T>();
+        gpu.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }
+            ],
+            label: Some(format!("{type_name} Bind Group Layout").as_str()),
+        })
+    }
 }
