@@ -3,16 +3,32 @@ use image::GenericImageView;
 use wgpu::util::DeviceExt;
 use bytemuck::Pod;
 
+use crate::Gpu;
+
 pub struct Sprite {
     texture: UniformTexture,
     mesh: GpuMesh<Vertex>,
-    transfrom: GpuMat4,
+    transform: GpuMat4,
 } impl Sprite {
-    pub fn set_mvp(&mut self) {
+    pub fn new_arrow(gpu: &Gpu) -> Self {
+        let mesh = make_mesh(gpu, 1f32, 1f32);
+        let image = image::load_from_memory(include_bytes!("../asset/triangle.png")).unwrap();
+        let texture = UniformTexture::from_image(gpu, &image, "Arrow Image");
+
+        Self {
+            texture,
+            mesh,
+            transform: GpuMat4::new(gpu)
+        }
     }
-    pub fn draw(&mut self, render_pass: wgpu::RenderPass) {
+
+    pub fn set_mvp(&mut self, gpu: &Gpu, mvp: nalgebra::Matrix4<f32>) {
+        gpu.queue.write_buffer(&self.transform.buffer, 0, bytemuck::cast_slice(mvp.as_slice()));
+    }
+
+    pub fn draw(&mut self, render_pass: &mut wgpu::RenderPass) {
         render_pass.set_bind_group(0, self.texture.bind_group(), &[]);
-        render_pass.set_bind_group(1, self.transfrom.bind_group(), &[]);
+        render_pass.set_bind_group(1, self.transform.bind_group(), &[]);
         render_pass.set_vertex_buffer(0, self.mesh.vertices().slice(..));
         render_pass.set_index_buffer(self.mesh.indices().slice(..), wgpu::IndexFormat::Uint32);
         render_pass.draw_indexed(0..(self.mesh.len_indices()), 0, 0..1);
@@ -26,7 +42,7 @@ pub struct GpuMesh<T> {
     len_indices: u32,
     len_vertices: u32,
 } impl<T> GpuMesh<T> where T: bytemuck::Pod {
-    pub fn from_slices(gpu: &Arc<crate::Gpu>, vertices: &[T], indices: &[u32]) -> Self {
+    pub fn from_slices(gpu: &crate::Gpu, vertices: &[T], indices: &[u32]) -> Self {
         let vertex_buffer = gpu.device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("Vertex Buffer"),
@@ -99,7 +115,7 @@ pub struct UniformTexture {
     size: (u32, u32),
 } impl UniformTexture {
     pub fn from_image(
-        gpu: &Arc<crate::Gpu>,
+        gpu: &Gpu,
         img: &image::DynamicImage,
         label: &str,
     ) -> Self {
@@ -345,7 +361,7 @@ pub struct GpuUniform<T: Default + Copy + Pod + 'static> {
     bind_group: wgpu::BindGroup,
     _phantom: std::marker::PhantomData<T>,
 } impl<T: Default + Copy + Pod + 'static> GpuUniform<T> {
-    pub fn new(gpu: &Arc<crate::Gpu>) -> Self {
+    pub fn new(gpu: &Gpu) -> Self {
         let zero = T::default();
         let type_name = std::any::type_name::<T>();
         let buffer = gpu.device.create_buffer_init(
@@ -399,4 +415,36 @@ pub struct GpuUniform<T: Default + Copy + Pod + 'static> {
             label: Some(format!("{type_name} Bind Group Layout").as_str()),
         })
     }
+}
+
+fn make_mesh(gpu: &Gpu, width: f32, height: f32) -> GpuMesh<Vertex> {
+    let (vertices, indices) = square(width, height);
+    let vertices = vertices.as_slice();
+    let indices = indices.as_slice();
+
+    GpuMesh::from_slices(gpu, vertices, indices)
+}
+
+fn square(width: f32, height: f32) -> (Vec<Vertex>, Vec<u32>) {
+    let half_width = width / 2.0;
+    let half_height = height / 2.0;
+
+    (vec![
+        Vertex {
+            position: [-half_width, half_height, 0.0],
+            uv: [0.0, 0.0],
+        },
+        Vertex {
+            position: [half_width, half_height, 0.0],
+            uv: [1.0, 0.0],
+        },
+        Vertex {
+            position: [-half_width, -half_height, 0.0],
+            uv: [0.0, 1.0],
+        },
+        Vertex {
+            position: [half_width, -half_height, 0.0],
+            uv: [1.0, 1.0],
+        },
+    ], vec![2, 1, 0, 3, 1, 2])
 }

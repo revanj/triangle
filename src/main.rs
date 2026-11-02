@@ -167,7 +167,6 @@ fn render(world: &mut hecs::World, global: hecs::Entity) {
             multiview_mask: None,
         });
         render_pass.set_pipeline(&rdr.sprite_pipeline);
-
     }
 
     rdr.gpu.queue.submit(std::iter::once(encoder.finish()));
@@ -216,6 +215,14 @@ impl<G: Game> ApplicationHandler for Engine<G> {
             },
             WindowEvent::RedrawRequested => {
                 if self.finished_init {
+                    {
+                        let rdr: &Renderer = &self.world.get::<&Renderer>(self.global).unwrap();
+                        let mut query = self.world.query::<(&mut Sprite, &nalgebra::Matrix4<f32>)>();
+                        for (sprite, transform) in query.iter() {
+                            sprite.set_mvp(&rdr.gpu, *transform);
+                        }
+                    }
+
                     render(&mut self.world, self.global);
                 }
             },
@@ -240,8 +247,12 @@ impl Game for FlockOfBirdsGame {
     fn init(world: &mut hecs::World, global: hecs::Entity) {
         let renderer = world.entity(global).unwrap().get::<&Renderer>().unwrap();
         let default_camera = camera::Camera::new(vector![0.0, 0.0], renderer.size_vec());
+        let sprite = Sprite::new_arrow(&renderer.gpu);
         drop(renderer);
         world.insert(global, (default_camera,)).unwrap();
+        let default_transform = nalgebra::Matrix4::<f32>::identity();
+
+        let thing = world.spawn((sprite, default_transform));
     }
 }
 

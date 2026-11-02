@@ -22,7 +22,7 @@ impl Camera {
         }
     }
 
-    // note that the z axis points outwards
+    // note that the z axis points outwards - rj
     pub fn pv_matrix(&self) -> Mat4 {
         ortho_projection(self.center, self.extent, self.near, self.far, self.zoom)
     }
