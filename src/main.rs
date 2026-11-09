@@ -1,9 +1,10 @@
 mod sprite;
 mod camera;
 
-use std::{marker::PhantomData, sync::{Arc, mpsc::{Receiver, Sender, TryRecvError}}};
+use std::{f32::consts::PI, marker::PhantomData, sync::Arc};
 
-use nalgebra::vector;
+use nalgebra::{Matrix4, vector};
+use rand::RngExt;
 use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{ActiveEventLoop, EventLoop}, window::Window};
 
 use crate::sprite::Sprite;
@@ -109,11 +110,6 @@ struct Renderer {
         nalgebra::vector![extent.width as f32, extent.height as f32]
     }
 
-    pub fn render(&mut self) -> anyhow::Result<()> {
-        
-        Ok(())
-    }
-
     pub fn request_redraw(&mut self) {
         self.window.request_redraw();
     }
@@ -167,11 +163,18 @@ fn render(world: &mut hecs::World, global: hecs::Entity) {
             multiview_mask: None,
         });
         render_pass.set_pipeline(&rdr.sprite_pipeline);
+
+        let mut query = world.query::<(&mut Sprite,)>();
+        for (sprite,) in query.iter() {
+            sprite.draw(&mut render_pass)
+        }
     }
 
     rdr.gpu.queue.submit(std::iter::once(encoder.finish()));
     rdr.gpu.queue.present(output);
 }
+
+struct MousePosition(nalgebra::Vector2<f32>);
 
 struct Engine<G: Game> {
     finished_init: bool,
@@ -182,6 +185,7 @@ struct Engine<G: Game> {
     pub fn new() -> Self {
         let mut world = hecs::World::new();
         let global = world.spawn(());
+        world.insert_one(global, MousePosition(nalgebra::Vector2::zeros())).unwrap();
 
         Self {
             finished_init: false,
@@ -197,6 +201,8 @@ impl<G: Game> ApplicationHandler for Engine<G> {
         let window_attributes = Window::default_attributes();
         let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
         let renderer = pollster::block_on(Renderer::new(window));
+        let default_camera = camera::Camera::new(vector![0f32, 0f32], renderer.size_vec());
+        self.world.insert(self.global, (default_camera,)).unwrap();
         self.world.insert(self.global, (renderer,)).unwrap();
         G::init(&mut self.world, self.global);
         self.finished_init = true;
@@ -215,15 +221,21 @@ impl<G: Game> ApplicationHandler for Engine<G> {
             },
             WindowEvent::RedrawRequested => {
                 if self.finished_init {
+                    G::update(&mut self.world, self.global);
                     {
+                        let camera: &camera::Camera = &self.world.get::<&camera::Camera>(self.global).unwrap();
+                        let pv_matrix = camera.pv_matrix();
                         let rdr: &Renderer = &self.world.get::<&Renderer>(self.global).unwrap();
                         let mut query = self.world.query::<(&mut Sprite, &nalgebra::Matrix4<f32>)>();
                         for (sprite, transform) in query.iter() {
-                            sprite.set_mvp(&rdr.gpu, *transform);
+                            sprite.set_mvp(&rdr.gpu, pv_matrix * transform);
                         }
                     }
 
                     render(&mut self.world, self.global);
+
+                    let mut renderer = self.world.get::<&mut Renderer>(self.global).unwrap();
+                    renderer.request_redraw();
                 }
             },
             WindowEvent::Resized(size) 
@@ -231,28 +243,80 @@ impl<G: Game> ApplicationHandler for Engine<G> {
                 let mut renderer = self.world.get::<&mut Renderer>(self.global).unwrap();
                 renderer.resize(size.width, size.height);
                 renderer.request_redraw();
+                let mut camera = self.world.get::<&mut camera::Camera>(self.global).unwrap();
+                camera.resize(vector![size.width as f32, size.height as f32]);
             }
-            _ => (),
+            WindowEvent::CursorMoved { device_id: _, position } => {
+                let mut mouse_position = self.world.get::<&mut MousePosition>(self.global).unwrap();
+                let screen_size = self.world.get::<&Renderer>(self.global).unwrap().size_vec();
+                *mouse_position = MousePosition(nalgebra::vector![position.x as f32, screen_size.y - position.y as f32]);
+            },
+            _ => ()
         }
     }
 }
 
 trait Game {
     fn init(world: &mut hecs::World, global: hecs::Entity);
+    fn update(world: &mut hecs::World, global: hecs::Entity);
 }
 
+struct Position(nalgebra::Vector2<f32>);
+struct Heading(nalgebra::Vector2<f32>);
 
 struct FlockOfBirdsGame {}
 impl Game for FlockOfBirdsGame {
     fn init(world: &mut hecs::World, global: hecs::Entity) {
         let renderer = world.entity(global).unwrap().get::<&Renderer>().unwrap();
-        let default_camera = camera::Camera::new(vector![0.0, 0.0], renderer.size_vec());
-        let sprite = Sprite::new_arrow(&renderer.gpu);
+        let screen_size = renderer.size_vec();
+        let mut rng = rand::rng(); 
         drop(renderer);
-        world.insert(global, (default_camera,)).unwrap();
-        let default_transform = nalgebra::Matrix4::<f32>::identity();
+        
+        for _ in 0..100 {
+            let renderer = world.entity(global).unwrap().get::<&Renderer>().unwrap();
+            let sprite = Sprite::new_arrow(&renderer.gpu);
+            drop(renderer);
+            let x: f32 = rng.random();
+            let y: f32 = rng.random();
+            let pos = (nalgebra::vector![x, y] - vector![0.5, 0.5]).component_mul(&screen_size);
+            let mut transform = nalgebra::Matrix4::<f32>::new_scaling(30f32);
+            let position = Position(pos);
+            let rand_angle = rng.random::<f32>() * 2f32 * PI;
+            let heading = Heading(vector![f32::cos(rand_angle), f32::sin(rand_angle)]);
+            world.spawn((sprite, position, heading, transform));
+        }
 
-        let thing = world.spawn((sprite, default_transform));
+    }
+
+    fn update(world: &mut hecs::World, global: hecs::Entity) {
+        let camera = world.get::<&camera::Camera>(global).unwrap();
+        let mouse_pos = world.get::<&MousePosition>(global).unwrap().0;
+        let mouse_pos_world = camera.screen_pt_to_world(mouse_pos);
+        {
+        let mut query = world.query::<(hecs::Entity, &mut nalgebra::Matrix4<f32>, &Sprite)>();
+        let mut centroid_sum = nalgebra::vector![0f32, 0f32];
+        for (_, tf, _) in query.iter() {
+            centroid_sum += nalgebra::vector![tf[(0,3)], tf[(1,3)]];
+        }
+        let centroid = centroid_sum / query.iter().len() as f32;
+        let arrow_etts: Vec<hecs::Entity> =  query.iter().map(|x| x.0).collect();
+        for i in 0..arrow_etts.len() {
+            for j in i..arrow_etts.len() {
+
+            }
+        }
+        }
+
+        for (pos, heading, tf) in world.query::<(&Position, &Heading, &mut Matrix4<f32>,)>().iter() {
+            tf[(0, 3)] = pos.0.x;
+            tf[(1, 3)] = pos.0.y;
+            let scaled_heading = heading.0 * 15f32;
+            // basis x is (heading.y -heading.x)
+            // basis y is (heading.x heading.y)
+            tf.set_column(0, &vector![scaled_heading.y, -scaled_heading.x, 0f32, 0f32]);
+            tf.set_column(1, &vector![scaled_heading.x, scaled_heading.y, 0f32, 0f32]); 
+        }
+
     }
 }
 

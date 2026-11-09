@@ -8,7 +8,7 @@ use crate::Gpu;
 pub struct Sprite {
     texture: UniformTexture,
     mesh: GpuMesh<Vertex>,
-    transform: GpuMat4,
+    transform: UniformMat4,
 } impl Sprite {
     pub fn new_arrow(gpu: &Gpu) -> Self {
         let mesh = make_mesh(gpu, 1f32, 1f32);
@@ -18,11 +18,12 @@ pub struct Sprite {
         Self {
             texture,
             mesh,
-            transform: GpuMat4::new(gpu)
+            transform: UniformMat4::new(gpu)
         }
     }
 
     pub fn set_mvp(&mut self, gpu: &Gpu, mvp: nalgebra::Matrix4<f32>) {
+        
         gpu.queue.write_buffer(&self.transform.buffer, 0, bytemuck::cast_slice(mvp.as_slice()));
     }
 
@@ -40,7 +41,6 @@ pub struct GpuMesh<T> {
     _phantom_vertex: PhantomData<T>,
     index_buffer: wgpu::Buffer,
     len_indices: u32,
-    len_vertices: u32,
 } impl<T> GpuMesh<T> where T: bytemuck::Pod {
     pub fn from_slices(gpu: &crate::Gpu, vertices: &[T], indices: &[u32]) -> Self {
         let vertex_buffer = gpu.device.create_buffer_init(
@@ -63,7 +63,6 @@ pub struct GpuMesh<T> {
             vertex_buffer,
             index_buffer,
             len_indices: indices.len() as u32,
-            len_vertices: vertices.len() as u32,
             _phantom_vertex: PhantomData,
         }
     }
@@ -73,10 +72,6 @@ pub struct GpuMesh<T> {
 
     pub fn len_indices(&self) -> u32 {
         self.len_indices
-    }
-
-    pub fn len_vertices(&self) -> u32 {
-        self.len_vertices
     }
 }
 
@@ -112,7 +107,6 @@ pub struct UniformTexture {
     _view: wgpu::TextureView,
     _sampler: wgpu::Sampler,
     bind_group: wgpu::BindGroup,
-    size: (u32, u32),
 } impl UniformTexture {
     pub fn from_image(
         gpu: &Gpu,
@@ -196,7 +190,6 @@ pub struct UniformTexture {
             _view: view, 
             _sampler: sampler, 
             bind_group, 
-            size: img.dimensions(),
         }
     }
 
@@ -227,67 +220,6 @@ pub struct UniformTexture {
             label: Some("Texture Bind Group Layout"),
         })
     }
-    
-    pub fn size(&self) -> (u32, u32) {
-        self.size
-    }
-
-    pub fn size_float(&self) -> (f32, f32) {
-        let (w, h) = self.size;
-
-        (w as f32, h as f32)
-    }
-}
-
-pub struct UniformMatrix {
-    buffer: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
-} impl UniformMatrix {
-    pub fn new(gpu: &Arc<crate::Gpu>) -> Self {
-        let zero = [[0f32; 4]; 4];
-        let buffer = gpu.device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Mat4x4 Uniform Buffer"),
-                contents: bytemuck::cast_slice(&[zero]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            }
-        );
-        let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &Self::bind_group_layout(gpu),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: buffer.as_entire_binding(),
-                }
-            ],
-            label: Some("UniformMatrix Bind Group"),
-        });
-
-        Self {
-            buffer,
-            bind_group,
-        }
-    }
-
-    pub fn bind_group_layout(gpu: &crate::Gpu) -> wgpu::BindGroupLayout {
-        gpu.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: 
-                        wgpu::ShaderStages::FRAGMENT 
-                        | wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }
-            ],
-            label: Some("Matrix Bind Group Layout"),
-        })
-    }
 }
 
 pub fn create_pipeline(gpu: &Arc<crate::Gpu>, surface_format: wgpu::TextureFormat) -> wgpu::RenderPipeline {
@@ -305,7 +237,7 @@ pub fn create_pipeline(gpu: &Arc<crate::Gpu>, surface_format: wgpu::TextureForma
                 label: Some("Render Pipeline Layout"),
                 bind_group_layouts: &[
                     Some(&UniformTexture::bind_group_layout(gpu)),
-                    Some(&UniformMatrix::bind_group_layout(gpu)),
+                    Some(&UniformMat4::bind_group_layout(gpu)),
                 ],
                 immediate_size: 0,
             });
@@ -352,9 +284,7 @@ pub fn create_pipeline(gpu: &Arc<crate::Gpu>, surface_format: wgpu::TextureForma
         })
 }
 
-pub type GpuMat4 = GpuUniform<[[f32; 4]; 4]>;
-pub type GpuVec4 = GpuUniform<[f32; 4]>;
-pub type GpuFloat = GpuUniform<f32>;
+pub type UniformMat4 = GpuUniform<[[f32; 4]; 4]>;
 
 pub struct GpuUniform<T: Default + Copy + Pod + 'static> {
     buffer: wgpu::Buffer,
@@ -391,10 +321,6 @@ pub struct GpuUniform<T: Default + Copy + Pod + 'static> {
 
     pub fn bind_group(&self) -> &wgpu::BindGroup {
         &self.bind_group
-    }
-
-    pub fn buffer(&self) -> &wgpu::Buffer {
-        &self.buffer
     }
 
     pub fn bind_group_layout(gpu: &crate::Gpu) -> wgpu::BindGroupLayout {

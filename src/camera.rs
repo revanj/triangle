@@ -1,7 +1,4 @@
-use nalgebra::vector;
-
 type Vector2 = nalgebra::Vector2<f32>;
-type Vector4 = nalgebra::Vector4<f32>;
 type Mat4 = nalgebra::Matrix4<f32>;
 #[derive(Copy, Clone)]
 pub struct Camera {
@@ -27,7 +24,7 @@ impl Camera {
         ortho_projection(self.center, self.extent, self.near, self.far, self.zoom)
     }
 
-    pub fn set_screen_extent(&mut self, ext: Vector2) {
+    pub fn resize(&mut self, ext: Vector2) {
         self.extent = ext;
     }
 
@@ -38,19 +35,6 @@ impl Camera {
             ndc_x * self.extent[0] / (self.zoom * 2.0) + self.center[0],
             ndc_y * self.extent[1] / (self.zoom * 2.0) + self.center[1],
         )
-    }
-
-    pub fn screen_vec_to_world(&self, screen_vec: Vector2) -> Vector2 {
-        screen_vec / self.zoom
-    }
-
-    pub fn world_point_to_screen(&self, pt: Vector2, screen_size: Vector2) -> Vector2 {
-        let padded = Vector4::new(pt[0], pt[1], 0.0, 1.0);
-        let pv = self.pv_matrix();
-        let transformed = pv * padded;
-        let w_divided = Vector2::new(transformed[0], transformed[1]) / transformed[3];
-
-        ((w_divided + vector![1.0, 1.0]) * 0.5).component_mul(&screen_size)
     }
 }
 
