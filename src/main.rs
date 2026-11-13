@@ -3,6 +3,7 @@ mod camera;
 
 use std::{f32::consts::PI, marker::PhantomData, sync::Arc};
 
+use hecs::Entity;
 use nalgebra::{Matrix4, vector};
 use rand::RngExt;
 use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{ActiveEventLoop, EventLoop}, window::Window};
@@ -262,7 +263,7 @@ trait Game {
 }
 
 struct Position(nalgebra::Vector2<f32>);
-struct Heading(nalgebra::Vector2<f32>);
+struct Velocity(nalgebra::Vector2<f32>);
 
 struct FlockOfBirdsGame {}
 impl Game for FlockOfBirdsGame {
@@ -282,8 +283,8 @@ impl Game for FlockOfBirdsGame {
             let mut transform = nalgebra::Matrix4::<f32>::new_scaling(30f32);
             let position = Position(pos);
             let rand_angle = rng.random::<f32>() * 2f32 * PI;
-            let heading = Heading(vector![f32::cos(rand_angle), f32::sin(rand_angle)]);
-            world.spawn((sprite, position, heading, transform));
+            let velocity = Velocity(vector![f32::cos(rand_angle), f32::sin(rand_angle)]);
+            world.spawn((sprite, position, velocity, transform));
         }
 
     }
@@ -291,26 +292,84 @@ impl Game for FlockOfBirdsGame {
     fn update(world: &mut hecs::World, global: hecs::Entity) {
         let camera = world.get::<&camera::Camera>(global).unwrap();
         let mouse_pos = world.get::<&MousePosition>(global).unwrap().0;
+        let left_margin = -800f32;
+        let right_margin = 800f32;
+        let bottom_margin = -800f32;
+        let top_margin = 800f32;
+        let avoid_factor = 0.05f32;
+        let matching_factor = 0.05f32;
+        let centering_factor = 0.0005f32;
+        let turn_factor = 0.2f32;
+        let max_speed = 1.5f32;
+        let min_speed = 1.0f32;
+        let visual_range = 50.0f32;
+        let protected_range = 10.0f32;
+
         let mouse_pos_world = camera.screen_pt_to_world(mouse_pos);
         {
-        let mut query = world.query::<(hecs::Entity, &mut nalgebra::Matrix4<f32>, &Sprite)>();
-        let mut centroid_sum = nalgebra::vector![0f32, 0f32];
-        for (_, tf, _) in query.iter() {
-            centroid_sum += nalgebra::vector![tf[(0,3)], tf[(1,3)]];
-        }
-        let centroid = centroid_sum / query.iter().len() as f32;
-        let arrow_etts: Vec<hecs::Entity> =  query.iter().map(|x| x.0).collect();
-        for i in 0..arrow_etts.len() {
-            for j in i..arrow_etts.len() {
+            let mut query = world.query::<(Entity, &mut Velocity, &mut Position)>();
+            let arrow_etts: Vec<hecs::Entity> = query.iter().map(|x| x.0).collect();
+            let mut view = query.view();
 
+            for i in 0..arrow_etts.len() {
+                let mut vel_avoid = vector![0f32, 0f32];
+                let mut vel_avg = vector![0f32, 0f32];
+                let mut pos_avg = vector![0f32, 0f32];
+
+                let mut count = 0;
+                for j in i..arrow_etts.len() {
+                    if i == j {continue;}
+                    let [this, other] = view.get_disjoint_mut([arrow_etts[i], arrow_etts[j]]);
+                    let [(_, _, this_pos), (_, other_vel, other_pos)] = [this.unwrap(), other.unwrap()];
+                    if (this_pos.0 - other_pos.0).norm() > visual_range { continue; }
+                    vel_avg += other_vel.0;
+                    pos_avg += other_pos.0;
+                    count += 1;
+                    if (this_pos.0 - other_pos.0).norm() > protected_range { continue; }
+                    vel_avoid += this_pos.0 - other_pos.0;
+                }
+
+                vel_avg /= count as f32;
+                pos_avg /= count as f32;
+
+                let (_, this_vel, this_pos) = view.get_mut(arrow_etts[i]).unwrap();
+                let vel_delta = vel_avg - this_vel.0;
+                let pos_delta = pos_avg - this_pos.0;
+                
+                this_vel.0 += vel_avoid * avoid_factor;
+                if count != 0 {
+                    this_vel.0 += vel_delta * matching_factor;
+                    this_vel.0 += pos_delta * centering_factor;
+                }
+
+                if this_pos.0.x < left_margin {
+                    this_vel.0.x += turn_factor;
+                }        
+                if this_pos.0.x > right_margin {
+                    this_vel.0.x -= turn_factor;
+                }
+                if this_pos.0.y < bottom_margin {
+                    this_vel.0.y += turn_factor;
+                }
+                if this_pos.0.y > top_margin {
+                    this_vel.0.y -= turn_factor;
+                }
+                let speed = this_vel.0.norm();
+                if speed > max_speed {
+                    this_vel.0 = (this_vel.0 / speed) * max_speed;
+                }
+                if speed < min_speed {
+                    this_vel.0 = (this_vel.0 / speed) * min_speed;
+                }
+
+                this_pos.0 += this_vel.0;
             }
         }
-        }
 
-        for (pos, heading, tf) in world.query::<(&Position, &Heading, &mut Matrix4<f32>,)>().iter() {
+        for (pos, heading, tf) in world.query::<(&Position, &Velocity, &mut Matrix4<f32>,)>().iter() {
             tf[(0, 3)] = pos.0.x;
             tf[(1, 3)] = pos.0.y;
-            let scaled_heading = heading.0 * 15f32;
+            let scaled_heading = heading.0.normalize() * 15f32;
             // basis x is (heading.y -heading.x)
             // basis y is (heading.x heading.y)
             tf.set_column(0, &vector![scaled_heading.y, -scaled_heading.x, 0f32, 0f32]);
