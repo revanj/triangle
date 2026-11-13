@@ -6,6 +6,7 @@ use std::{f32::consts::PI, marker::PhantomData, sync::Arc};
 use hecs::Entity;
 use nalgebra::{Matrix4, vector};
 use rand::RngExt;
+use wgpu::wgc::MAX_COLOR_ATTACHMENTS;
 use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{ActiveEventLoop, EventLoop}, window::Window};
 
 use crate::sprite::Sprite;
@@ -292,18 +293,22 @@ impl Game for FlockOfBirdsGame {
     fn update(world: &mut hecs::World, global: hecs::Entity) {
         let camera = world.get::<&camera::Camera>(global).unwrap();
         let mouse_pos = world.get::<&MousePosition>(global).unwrap().0;
-        let left_margin = -800f32;
-        let right_margin = 800f32;
-        let bottom_margin = -800f32;
-        let top_margin = 800f32;
-        let avoid_factor = 0.05f32;
+        let left_margin = -350f32;
+        let right_margin = 350f32;
+        let bottom_margin = -350f32;
+        let top_margin = 350f32;
+        let avoid_factor = 0.01f32;
         let matching_factor = 0.05f32;
         let centering_factor = 0.0005f32;
         let turn_factor = 0.2f32;
-        let max_speed = 1.5f32;
-        let min_speed = 1.0f32;
+        let max_speed = 1.0f32;
+        let min_speed = 0.5f32;
         let visual_range = 50.0f32;
         let protected_range = 10.0f32;
+        let mouse_attraction = 0.001f32;
+        let mouse_rotation = 0.08f32;
+        let min_radius = 10f32;
+        let mouse_follow = false;
 
         let mouse_pos_world = camera.screen_pt_to_world(mouse_pos);
         {
@@ -335,8 +340,22 @@ impl Game for FlockOfBirdsGame {
                 let (_, this_vel, this_pos) = view.get_mut(arrow_etts[i]).unwrap();
                 let vel_delta = vel_avg - this_vel.0;
                 let pos_delta = pos_avg - this_pos.0;
+                let mouse_delta = mouse_pos_world - this_pos.0;
+
+                let mouse_tangent = vector![mouse_delta.y,  -mouse_delta.x];
+                let radius = mouse_tangent.norm();
+                let mouse_tangent = mouse_tangent.normalize();
+
+                if !mouse_tangent.x.is_nan() && !mouse_tangent.y.is_nan() && mouse_follow {
+                    this_vel.0 += mouse_tangent * mouse_rotation * ((min_radius-radius).max(-0f32)).exp();
+                }
                 
                 this_vel.0 += vel_avoid * avoid_factor;
+
+                if radius > min_radius  && mouse_follow {
+                    this_vel.0 += mouse_delta * mouse_attraction;
+                }
+
                 if count != 0 {
                     this_vel.0 += vel_delta * matching_factor;
                     this_vel.0 += pos_delta * centering_factor;
