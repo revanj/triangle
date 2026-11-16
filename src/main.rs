@@ -308,7 +308,7 @@ impl Game for FlockOfBirdsGame {
         let mouse_attraction = 0.001f32;
         let mouse_rotation = 0.08f32;
         let min_radius = 10f32;
-        let mouse_follow = false;
+        let mouse_follow = true;
 
         let mouse_pos_world = camera.screen_pt_to_world(mouse_pos);
         {
